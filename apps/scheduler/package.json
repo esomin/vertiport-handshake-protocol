@@ -23,8 +23,11 @@
   "dependencies": {
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
+    "@nestjs/microservices": "^11.1.14",
     "@nestjs/platform-express": "^11.0.1",
     "@uam/types": "workspace:*",
+    "ioredis": "^5.9.3",
+    "mqtt": "^5.15.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },
