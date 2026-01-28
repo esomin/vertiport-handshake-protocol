@@ -58,7 +58,7 @@ uam-density-control/
 ├── turbo.json          # Turborepo 빌드 파이프라인 설정
 ├── pnpm-workspace.yaml # pnpm 워크스페이스 정의
 └── docker-compose.yml  # 전체 인프라(Mosquitto, Redis, DB) 실행
-```
+````
 
 - [simulator/README.md](apps/simulator/README.md)
 - [gateway/README.md](apps/gateway/README.md)

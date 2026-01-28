@@ -25,11 +25,14 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/microservices": "^11.1.14",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-socket.io": "^11.1.14",
+    "@nestjs/websockets": "^11.1.14",
     "@uam/types": "workspace:*",
     "ioredis": "^5.9.3",
     "mqtt": "^5.15.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -40,6 +43,7 @@
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",
+    "@types/socket.io": "^3.0.2",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
