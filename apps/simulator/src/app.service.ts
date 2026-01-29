@@ -4,7 +4,9 @@ import { UamVehicleStatus } from '@uam/types';
 
 @Injectable()
 export class AppService implements OnModuleInit {
-  constructor(@Inject('UAM_SERVICE') private client: ClientProxy) {}
+  private activeSimulations: Map<string, NodeJS.Timeout> = new Map();
+
+  constructor(@Inject('UAM_SERVICE') private client: ClientProxy) { }
 
   onModuleInit() {
     this.startSimulation();
@@ -14,7 +16,7 @@ export class AppService implements OnModuleInit {
     const uamId = `UAM-${Math.floor(Math.random() * 1000)}`;
 
     // 1초마다 반복 실행
-    setInterval(() => {
+    const intervalId = setInterval(() => {
       const status: UamVehicleStatus = {
         uamId,
         latitude: 37.5665 + Math.random() * 0.01,
@@ -30,5 +32,18 @@ export class AppService implements OnModuleInit {
       // 'uam/status'라는 토픽으로 데이터 전송
       this.client.emit('uam/status', status);
     }, 1000);
+
+    this.activeSimulations.set(uamId, intervalId);
+  }
+
+  stopSimulation(uamId: string) {
+    const intervalId = this.activeSimulations.get(uamId);
+    if (intervalId) {
+      clearInterval(intervalId);
+      this.activeSimulations.delete(uamId);
+      console.log(`[Simulator] Vehicle ${uamId} has successfully landed and stopped broadcasting.`);
+    } else {
+      console.log(`[Simulator] Warning: Vehicle ${uamId} not found or already stopped.`);
+    }
   }
 }
