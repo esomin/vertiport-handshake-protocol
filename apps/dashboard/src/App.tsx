@@ -4,6 +4,7 @@ import type { UamVehicleStatus } from '@uam/types';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   BatteryFull, AlertCircle, MapPin, Navigation,
   CheckCircle2, XCircle, PlaneLanding, Clock
@@ -18,8 +19,11 @@ interface LandedRecord {
 
 function App() {
   const [uams, setUams] = useState<UamVehicleStatus[]>([]);
+  const [displayedUams, setDisplayedUams] = useState<UamVehicleStatus[]>([]);
   const [landedUams, setLandedUams] = useState<LandedRecord[]>([]);
   const [pendingApproval, setPendingApproval] = useState<UamVehicleStatus | null>(null);
+  const [isQueueLocked, setIsQueueLocked] = useState(false);
+
 
   useEffect(() => {
     socket.on('uam:update', (data: UamVehicleStatus[]) => {
@@ -33,6 +37,20 @@ function App() {
       socket.off('landed:update');
     };
   }, []);
+
+  useEffect(() => {
+    if (!isQueueLocked) {
+      setDisplayedUams(uams);
+    }
+  }, [uams, isQueueLocked])
+
+  // 잠금 중 백그라운드에서 변경된 기체 수 계산 (배터리가 달라짃거나 새로 추가된 기체)
+  const pendingChangeCount = isQueueLocked
+    ? uams.filter(u => {
+      const matched = displayedUams.find(d => d.uamId === u.uamId);
+      return !matched || matched.batteryPercent !== u.batteryPercent;
+    }).length
+    : 0;
 
   // 버튼 클릭 시 기체 상태를 스냅샷으로 캡처하여 모달에 고정
   const handleApproveClick = (uam: UamVehicleStatus) => {
@@ -74,12 +92,35 @@ function App() {
 
         {/* ── 좌측: 비행 중 기체 큐 ── */}
         <div className={`flex-1 p-8 overflow-y-auto ${hasLanded ? 'max-w-[calc(100%-340px)]' : 'w-full'}`}>
-          <h2 className="text-lg font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <Navigation size={18} className="text-sky-400" />
-            비행 중 기체 ({uams.length}대)
-          </h2>
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
+              <Navigation size={18} className="text-sky-400" />
+              비행 중 기체 ({displayedUams.length}대)
+            </h2>
+
+            {/* 잠금 중 누적 변경 뱃지 */}
+            {isQueueLocked && pendingChangeCount > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/40 animate-pulse">
+                백그라운드 {pendingChangeCount}대 변경 중
+              </span>
+            )}
+
+            {/* 잠금 토글 스위치 */}
+            <label className="ml-auto flex items-center gap-2 cursor-pointer select-none">
+              <span className={`text-xs font-medium transition-colors duration-200 ${isQueueLocked ? 'text-amber-300' : 'text-slate-400'
+                }`}>
+                {isQueueLocked ? '잠금 중' : '실시간'}
+              </span>
+              <Switch
+                checked={isQueueLocked}
+                onCheckedChange={setIsQueueLocked}
+                className="data-[state=checked]:!bg-amber-500"
+                size='sm'
+              />
+            </label>
+          </div>
           <div className="flex flex-wrap gap-0">
-            {uams.map((uam, index) => {
+            {displayedUams.map((uam, index) => {
               const isLowBattery = uam.batteryPercent < 20;
               const isRankedLower = index >= 3;
 
@@ -90,7 +131,7 @@ function App() {
                 >
                   <Card className={`w-[320px] ${uam.isEmergency ? 'border-red-500 bg-red-950 text-white' : 'border-slate-700 bg-slate-900 text-white'}`}>
                     <CardHeader>
-                      <div className="flex justify-between items-center">
+                      <div className="flex justify-between items-center h-3">
                         <CardTitle className="font-mono flex items-center gap-2">
                           {uam.uamId}
                           {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-5 h-5" />}
@@ -253,7 +294,7 @@ function App() {
             <div className="flex gap-3">
               <Button
                 id="modal-cancel-btn"
-                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white"
+                className="flex-1 bg-slate-700 hover:!bg-slate-600 text-white"
                 variant="ghost"
                 onClick={handleCancel}
               >
