@@ -18,7 +18,7 @@ export class AppService {
     pipeline.set(`uam:detail:${uamId}`, JSON.stringify(data), 'EX', 60);
 
     await pipeline.exec();
-    console.log(`[Ranked] ${uamId} - Score: ${score.toFixed(1)}`);
+    // console.log(`[Ranked] ${uamId} - Score: ${score.toFixed(1)}`);
   }
 
   async sendLandingCommand(uamId: string) {

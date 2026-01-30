@@ -9,6 +9,7 @@ import {
   BatteryFull, AlertCircle, MapPin, Navigation,
   CheckCircle2, XCircle, PlaneLanding, Clock
 } from "lucide-react";
+import { Map3D } from './Map3D';
 
 const socket = io('http://localhost:3002');
 
@@ -75,7 +76,7 @@ function App() {
   const hasLanded = landedUams.length > 0;
 
   return (
-    <div className="bg-slate-950 min-h-screen text-white flex flex-col">
+    <div className="bg-slate-950 h-screen overflow-hidden text-white flex flex-col">
       {/* ── 헤더 ── */}
       <div className="px-8 pt-8 pb-4 border-b border-slate-800 flex items-center gap-4">
         <h1 className="text-3xl font-bold">UAM Real-Time Control Dashboard</h1>
@@ -90,84 +91,94 @@ function App() {
       {/* ── 본문: 좌우 분할 ── */}
       <div className={`flex flex-1 overflow-hidden ${hasLanded ? 'divide-x divide-slate-800' : ''}`}>
 
-        {/* ── 좌측: 비행 중 기체 큐 ── */}
-        <div className={`flex-1 p-8 overflow-y-auto ${hasLanded ? 'max-w-[calc(100%-340px)]' : 'w-full'}`}>
-          <div className="flex items-center gap-3 mb-4">
-            <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
-              <Navigation size={18} className="text-sky-400" />
-              비행 중 기체 ({displayedUams.length}대)
-            </h2>
+        {/* ── 좌측: 비행 중 기체 큐 및 3D 맵 ── */}
+        <div className={`flex flex-col min-w-0 ${hasLanded ? 'max-w-[calc(100%-340px)]' : 'flex-1'}`}>
 
-            {/* 잠금 중 누적 변경 뱃지 */}
-            {isQueueLocked && pendingChangeCount > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/40 animate-pulse">
-                백그라운드 {pendingChangeCount}대 변경 중
-              </span>
-            )}
+          {/* 상단: 기체 목록 (스크롤 가능) */}
+          <div className="flex-1 p-8 overflow-y-auto">
+            <div className="flex items-center gap-3 mb-4">
+              <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
+                <Navigation size={18} className="text-sky-400" />
+                비행 중 기체 ({displayedUams.length}대)
+              </h2>
 
-            {/* 잠금 토글 스위치 */}
-            <label className="ml-auto flex items-center gap-2 cursor-pointer select-none">
-              <span className={`text-xs font-medium transition-colors duration-200 ${isQueueLocked ? 'text-amber-300' : 'text-slate-400'
-                }`}>
-                {isQueueLocked ? '잠금 중' : '실시간'}
-              </span>
-              <Switch
-                checked={isQueueLocked}
-                onCheckedChange={setIsQueueLocked}
-                className="data-[state=checked]:!bg-amber-500"
-                size='sm'
-              />
-            </label>
+              {/* 잠금 중 누적 변경 뱃지 */}
+              {isQueueLocked && pendingChangeCount > 0 && (
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/40 animate-pulse">
+                  백그라운드 {pendingChangeCount}대 변경 중
+                </span>
+              )}
+
+              {/* 잠금 토글 스위치 */}
+              <label className="ml-auto flex items-center gap-2 cursor-pointer select-none">
+                <span className={`text-xs font-medium transition-colors duration-200 ${isQueueLocked ? 'text-amber-300' : 'text-slate-400'
+                  }`}>
+                  {isQueueLocked ? '잠금 중' : '실시간'}
+                </span>
+                <Switch
+                  checked={isQueueLocked}
+                  onCheckedChange={setIsQueueLocked}
+                  className="data-[state=checked]:!bg-amber-500"
+                  size='sm'
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-0">
+              {displayedUams.map((uam, index) => {
+                const isLowBattery = uam.batteryPercent < 20;
+                const isRankedLower = index >= 3;
+
+                return (
+                  <div
+                    key={uam.uamId}
+                    className={`p-4 transition-opacity duration-500 ${isRankedLower ? 'opacity-40 hover:opacity-100' : 'opacity-100'}`}
+                  >
+                    <Card className={`w-[240px] ${uam.isEmergency ? 'border-red-500 bg-red-950 text-white' : 'border-slate-700 bg-slate-900 text-white'}`}>
+                      <CardHeader>
+                        <div className="flex justify-between items-center h-3">
+                          <CardTitle className="font-mono flex items-center gap-2">
+                            {uam.uamId}
+                            {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-5 h-5" />}
+                          </CardTitle>
+                          {uam.isEmergency && <Badge variant="destructive">Emergency</Badge>}
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex flex-col gap-2 mb-4">
+                          <p className="flex items-center gap-2 text-sm text-slate-300">
+                            <BatteryFull className={isLowBattery ? 'text-red-500' : 'text-green-500'} size={18} />
+                            <span className={isLowBattery ? 'text-red-500 font-bold' : ''}>
+                              배터리: {uam.batteryPercent.toFixed(1)}%
+                            </span>
+                          </p>
+                          <p className="text-sm text-slate-400">
+                            좌표: {uam.latitude.toFixed(4)}, {uam.longitude.toFixed(4)}
+                          </p>
+                          <p className="text-sm text-slate-400">
+                            고도: {uam.altitude.toFixed(0)}m
+                          </p>
+                        </div>
+                        <Button
+                          className="w-full"
+                          variant={uam.isEmergency ? "destructive" : "default"}
+                          onClick={() => handleApproveClick(uam)}
+                        >
+                          착륙 승인
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-0">
-            {displayedUams.map((uam, index) => {
-              const isLowBattery = uam.batteryPercent < 20;
-              const isRankedLower = index >= 3;
 
-              return (
-                <div
-                  key={uam.uamId}
-                  className={`p-4 transition-opacity duration-500 ${isRankedLower ? 'opacity-40 hover:opacity-100' : 'opacity-100'}`}
-                >
-                  <Card className={`w-[320px] ${uam.isEmergency ? 'border-red-500 bg-red-950 text-white' : 'border-slate-700 bg-slate-900 text-white'}`}>
-                    <CardHeader>
-                      <div className="flex justify-between items-center h-3">
-                        <CardTitle className="font-mono flex items-center gap-2">
-                          {uam.uamId}
-                          {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-5 h-5" />}
-                        </CardTitle>
-                        {uam.isEmergency && <Badge variant="destructive">Emergency</Badge>}
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex flex-col gap-2 mb-4">
-                        <p className="flex items-center gap-2 text-sm text-slate-300">
-                          <BatteryFull className={isLowBattery ? 'text-red-500' : 'text-green-500'} size={18} />
-                          <span className={isLowBattery ? 'text-red-500 font-bold' : ''}>
-                            배터리: {uam.batteryPercent.toFixed(1)}%
-                          </span>
-                        </p>
-                        <p className="text-sm text-slate-400">
-                          좌표: {uam.latitude.toFixed(4)}, {uam.longitude.toFixed(4)}
-                        </p>
-                        <p className="text-sm text-slate-400">
-                          고도: {uam.altitude.toFixed(0)}m
-                        </p>
-                      </div>
-                      <Button
-                        className="w-full"
-                        variant={uam.isEmergency ? "destructive" : "default"}
-                        onClick={() => handleApproveClick(uam)}
-                      >
-                        착륙 승인
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </div>
-              );
-            })}
+          {/* 하단: 3D 맵 (고정 영역) */}
+          <div className="h-[600px] border-t border-slate-800 bg-slate-900 overflow-hidden relative">
+            <Map3D />
           </div>
         </div>
+
 
         {/* ── 우측: 착륙 완료 패널 (착륙 기체가 있을 때만 표시) ── */}
         {hasLanded && (

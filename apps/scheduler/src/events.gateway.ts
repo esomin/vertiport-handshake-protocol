@@ -28,7 +28,7 @@ export class EventsGateway implements OnModuleInit, OnGatewayConnection {
     // 1초마다 Redis에서 상위 10대의 기체 정보를 가져와 브라우저로 전송
     setInterval(async () => {
       // ZREVRANGE: 점수(우선순위)가 높은 순서대로 가져옴 (상위 10대)
-      const topUams = await this.redis.zrevrange('uam:landing:queue', 0, 9);
+      const topUams = await this.redis.zrevrange('uam:landing:queue', 0, 8);
 
       const details = await Promise.all(
         topUams.map(async (id) => {
