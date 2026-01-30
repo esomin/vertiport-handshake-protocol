@@ -8,8 +8,12 @@ export class AppService implements OnModuleInit {
 
   constructor(@Inject('UAM_SERVICE') private client: ClientProxy) { }
 
+  private readonly INITIAL_FLEET_SIZE = 25;
+
   onModuleInit() {
-    this.startSimulation();
+    for (let i = 0; i < this.INITIAL_FLEET_SIZE; i++) {
+      this.startSimulation();
+    }
   }
 
   startSimulation() {
@@ -27,7 +31,7 @@ export class AppService implements OnModuleInit {
         timestamp: Date.now(),
       };
 
-      console.log(`[Sending] ${uamId} - Battery: ${status.batteryPercent.toFixed(1)}%`);
+      // console.log(`[Sending] ${uamId} - Battery: ${status.batteryPercent.toFixed(1)}%`);
 
       // 'uam/status'라는 토픽으로 데이터 전송
       this.client.emit('uam/status', status);
@@ -42,6 +46,11 @@ export class AppService implements OnModuleInit {
       clearInterval(intervalId);
       this.activeSimulations.delete(uamId);
       console.log(`[Simulator] Vehicle ${uamId} has successfully landed and stopped broadcasting.`);
+
+      // 기체가 착륙했으므로, 트래픽 유지를 위해 2초 뒤 새로운 기체 생성
+      setTimeout(() => {
+        this.startSimulation();
+      }, 2000);
     } else {
       console.log(`[Simulator] Warning: Vehicle ${uamId} not found or already stopped.`);
     }

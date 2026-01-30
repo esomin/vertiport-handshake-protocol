@@ -1,5 +1,5 @@
 {
-  "name": "@uam/gateway",
+  "name": "gateway",
   "version": "0.0.0",
   "private": true,
   "scripts": {
