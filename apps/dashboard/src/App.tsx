@@ -133,14 +133,24 @@ function App() {
                     key={uam.uamId}
                     className={`p-4 transition-opacity duration-500 ${isRankedLower ? 'opacity-40 hover:opacity-100' : 'opacity-100'}`}
                   >
-                    <Card className={`w-[240px] ${uam.isEmergency ? 'border-red-500 bg-red-950 text-white' : 'border-slate-700 bg-slate-900 text-white'}`}>
+                    <Card className={`w-[240px] ${uam.isEmergency
+                      ? 'border-red-500 bg-red-950 text-white'
+                      : uam.waitingForLanding
+                        ? 'border-amber-400 bg-slate-900 text-white'
+                        : 'border-slate-700 bg-slate-900 text-white'
+                      }`}>
                       <CardHeader>
                         <div className="flex justify-between items-center h-3">
                           <CardTitle className="font-mono flex items-center gap-2">
                             {uam.uamId}
                             {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-5 h-5" />}
                           </CardTitle>
-                          {uam.isEmergency && <Badge variant="destructive">Emergency</Badge>}
+                          {uam.isEmergency
+                            ? <Badge variant="destructive">Emergency</Badge>
+                            : uam.waitingForLanding
+                              ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-xs">착륙 대기</Badge>
+                              : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-xs">비행 중</Badge>
+                          }
                         </div>
                       </CardHeader>
                       <CardContent>
@@ -162,8 +172,10 @@ function App() {
                           className="w-full"
                           variant={uam.isEmergency ? "destructive" : "default"}
                           onClick={() => handleApproveClick(uam)}
+                        // disabled={!uam.waitingForLanding}
                         >
                           착륙 승인
+                          {/* {uam.waitingForLanding ? '착륙 승인' : '비행 중'} */}
                         </Button>
                       </CardContent>
                     </Card>

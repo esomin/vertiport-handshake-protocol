@@ -6,13 +6,20 @@ import type { UamVehicleStatus } from '@uam/types';
 import maplibregl from 'maplibre-gl';
 
 const MAPTILER_API_KEY = import.meta.env.VITE_MAPTILER_API_KEY as string;
-// const MAP_STYLE = `https://api.maptiler.com/maps/streets-v2/style.json?key=${MAPTILER_API_KEY}`;
 const MAP_STYLE = `https://api.maptiler.com/maps/outdoor-v2/style.json?key=${MAPTILER_API_KEY}`;
 
 const TERRAIN_SPEC = {
   source: 'terrain-source',
   exaggeration: 2.0,
 };
+
+// 서울 주요 버티포트 거점
+const VERTIPORTS = [
+  { name: '잠실', key: 'jamsil', lat: 37.513, lng: 127.108, isTarget: true },
+  { name: '여의도', key: 'yeouido', lat: 37.525, lng: 126.924, isTarget: false },
+  { name: '강남', key: 'gangnam', lat: 37.501, lng: 127.037, isTarget: false },
+  { name: '수서', key: 'suseo', lat: 37.488, lng: 127.123, isTarget: false },
+];
 
 interface Map3DProps {
   uams: UamVehicleStatus[];
@@ -23,47 +30,16 @@ export function Map3D({ uams }: Map3DProps) {
     console.log('Map3D component mounted');
   }, []);
 
-  const _geojson: GeoJSON.FeatureCollection = {
-    type: 'FeatureCollection',
-    features: uams.map(a => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [a.longitude, a.latitude] },
-      properties: { id: a.uamId, heading: a.heading, altitude: a.altitude }
-    }))
-  };
-
-  // 기체 아이콘 및 텍스트 레이어 설정
-  const _layerStyle: LayerProps = {
-    id: 'uam-layer',
-    type: 'symbol',
-    layout: {
-      'icon-image': 'airport',
-      'icon-size': 1.5,
-      'icon-rotate': ['get', 'heading'], // heading 값에 따라 회전
-      'icon-rotation-alignment': 'map',
-      'text-field': ['get', 'id'],      // 기체 ID 표시
-      'text-offset': [0, 1.5],
-      'text-size': 12
-    },
-    paint: {
-      'text-color': '#000000',
-      'text-halo-color': '#ffffff',
-      'text-halo-width': 1
-    }
-  };
-
   return (
     <div className="w-full h-full min-h-[350px] relative bg-slate-950">
       <Map
         mapLib={maplibregl}
         initialViewState={{
-          longitude: 126.9780,
-          latitude: 37.5665,
-          // longitude: 128.4548,
-          // latitude: 38.1189, // 지형 테스트 용
-          zoom: 11,
-          bearing: -20,
-          pitch: 60,
+          longitude: 127.100,
+          latitude: 37.513,
+          zoom: 12,
+          bearing: -15,
+          pitch: 55,
         }}
         maxPitch={85}
         mapStyle={MAP_STYLE}
@@ -79,9 +55,39 @@ export function Map3D({ uams }: Map3DProps) {
 
         <NavigationControl position="top-right" />
 
-        {/* <Source id="aircrafts" type="geojson" data={geojson}>
-          <Layer {...layerStyle} />
-        </Source> */}
+        {/* 버티포트 마커 */}
+        {VERTIPORTS.map((vp) => (
+          <Marker key={vp.key} longitude={vp.lng} latitude={vp.lat} anchor="bottom">
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              {/* 핀 모양 아이콘 */}
+              <div
+                title={`${vp.name} 버티포트`}
+                style={{
+                  width: vp.isTarget ? 20 : 14,
+                  height: vp.isTarget ? 20 : 14,
+                  borderRadius: '50% 50% 50% 0',
+                  transform: 'rotate(-45deg)',
+                  backgroundColor: vp.isTarget ? '#f97316' : '#a78bfa',
+                  border: `2px solid ${vp.isTarget ? '#c2410c' : '#7c3aed'}`,
+                }}
+              />
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: vp.isTarget ? 11 : 9,
+                  color: vp.isTarget ? '#f97316' : '#c4b5fd',
+                  fontWeight: vp.isTarget ? 700 : 400,
+                  background: 'rgba(0,0,0,0.6)',
+                  padding: '1px 4px',
+                  borderRadius: 3,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {vp.isTarget ? `★ ${vp.name}` : vp.name}
+              </div>
+            </div>
+          </Marker>
+        ))}
 
         {/* UAM 마커 */}
         {uams.map((uam) => {
@@ -110,11 +116,11 @@ export function Map3D({ uams }: Map3DProps) {
                   style={{
                     width: size,
                     height: size,
-                    backgroundColor: uam.isEmergency ? '#ef4444' : '#38bdf8',
+                    backgroundColor: uam.waitingForLanding ? '#facc15' : '#38bdf8',
                     clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)', // 삼각형 모양
                     transform: `rotate(${uam.heading}deg)`, // 방향 반영
                     border: '1px solid white',
-                    boxShadow: uam.isEmergency ? '0 0 15px #ef4444' : 'none',
+                    boxShadow: uam.waitingForLanding ? '0 0 15px #facc15' : 'none',
                   }}
                 />
               </div>
