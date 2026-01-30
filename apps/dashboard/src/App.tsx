@@ -174,8 +174,8 @@ function App() {
           </div>
 
           {/* 하단: 3D 맵 (고정 영역) */}
-          <div className="h-[600px] border-t border-slate-800 bg-slate-900 overflow-hidden relative">
-            <Map3D />
+          <div className="h-[600px] p-8 overflow-hidden relative">
+            <Map3D uams={displayedUams} />
           </div>
         </div>
 
