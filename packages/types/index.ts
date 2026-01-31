@@ -1,4 +1,4 @@
-export type VertiportKey = 'jamsil' | 'yeouido' | 'gangnam' | 'suseo';
+export type VertiportKey = 'jamsil' | 'yeouido' | 'suseo';
 export interface VehicleState {
   lat: number;
   lng: number;

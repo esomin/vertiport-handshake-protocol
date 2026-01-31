@@ -19,22 +19,36 @@ interface LandedRecord {
 }
 
 function App() {
+  /** [Stream B] Redis top-10 → 착륙 승인 큐 렌더링용 */
   const [uams, setUams] = useState<UamVehicleStatus[]>([]);
   const [displayedUams, setDisplayedUams] = useState<UamVehicleStatus[]>([]);
+
+  /** [Stream A] MQTT raw 최신 50개 → 지도(Map3D) 렌더링용 */
+  const [mapUams, setMapUams] = useState<UamVehicleStatus[]>([]);
+
   const [landedUams, setLandedUams] = useState<LandedRecord[]>([]);
   const [pendingApproval, setPendingApproval] = useState<UamVehicleStatus | null>(null);
   const [isQueueLocked, setIsQueueLocked] = useState(false);
 
 
   useEffect(() => {
+    // [Stream B] 착륙 큐: Redis 우선순위 top-10
     socket.on('uam:update', (data: UamVehicleStatus[]) => {
       setUams(data);
     });
+
+    // [Stream A] 지도용: MQTT raw 최신 50대
+    socket.on('map:update', (data: UamVehicleStatus[]) => {
+      setMapUams(data);
+    });
+
     socket.on('landed:update', (data: LandedRecord[]) => {
       setLandedUams(data);
     });
+
     return () => {
       socket.off('uam:update');
+      socket.off('map:update');
       socket.off('landed:update');
     };
   }, []);
@@ -185,9 +199,9 @@ function App() {
             </div>
           </div>
 
-          {/* 하단: 3D 맵 (고정 영역) */}
+          {/* 하단: 3D 맵 (고정 영역) — MQTT raw 50대 데이터 사용 */}
           <div className="h-[600px] p-8 overflow-hidden relative">
-            <Map3D uams={displayedUams} />
+            <Map3D uams={mapUams} />
           </div>
         </div>
 

@@ -1,7 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller } from '@nestjs/common';
 import { MessagePattern, Payload } from '@nestjs/microservices';
 import { type UamVehicleStatus } from '@uam/types';
 import { AppService } from './app.service';
+import { EventsGateway } from './events.gateway';
 
 // 잠실 버티포트 좌표
 const JAMSIL_LAT = 37.513;
@@ -14,10 +15,24 @@ const MAX_ALT = 500;
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) { }
+  constructor(
+    private readonly appService: AppService,
+    private readonly eventsGateway: EventsGateway,
+  ) { }
 
-  @MessagePattern('uam/status/jamsil') // 잠실 목적지 기체만 구독
-  async handleVehicleStatus(@Payload() data: UamVehicleStatus) {
+  /**
+   * [Stream B] 착륙 큐 전용: 잠실 목적지 기체만 구독
+   * - 우선순위 점수 계산 후 Redis ZSET에 저장
+   * - NestJS MQTT 라우터는 구체 패턴을 우선 매칭하므로
+   *   와일드카드 핸들러(handleAllStatus)가 호출되지 않음 →
+   *   여기서 직접 updateMapBuffer도 함께 호출
+   */
+  @MessagePattern('uam/status/jamsil')
+  async handleJamsilStatus(@Payload() data: UamVehicleStatus) {
+    // 착륙 완료된 기체는 Redis 재저장 및 버퍼 갱신 관하지 않음
+    if (this.eventsGateway.isAlreadyLanded(data.uamId)) {
+      return;
+    }
     /**
      * [우선순위 점수 계산] 높을수록 먼저 착륙 승인 대상
      *
@@ -42,7 +57,20 @@ export class AppController {
 
     const priorityScore = emergency + batteryScore + distScore + altScore;
 
-    // Redis ZSET에 저장
+    // [Stream B] Redis ZSET에 저장 (착륙 큐 우선순위 계산용)
     await this.appService.updatePriorityQueue(data.uamId, priorityScore, data);
+
+    // [Stream A] 와일드카드 핸들러가 건너뛰어지므로 여기서 직접 지도 버퍼 갱신
+    this.eventsGateway.updateMapBuffer(data);
+  }
+
+  /**
+   * [Stream A] 지도용 rawBuffer 전용: 목적지 무관 전체 기체 구독
+   * - MQTT 와일드카드로 모든 버티포트 토픽 수신 → Map3D 렌더링용 버퍼에만 적재
+   * - 착륙 큐 로직(점수 계산/Redis)은 수행하지 않음
+   */
+  @MessagePattern('uam/status/+')
+  handleAllStatus(@Payload() data: UamVehicleStatus) {
+    this.eventsGateway.updateMapBuffer(data);
   }
 }

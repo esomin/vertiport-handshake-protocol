@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import Map, { Layer, Marker, NavigationControl, Source } from 'react-map-gl/maplibre';
-import type { LayerProps } from 'react-map-gl/maplibre';
+import Map, { Marker, NavigationControl, Source } from 'react-map-gl/maplibre';
+
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { UamVehicleStatus } from '@uam/types';
 import maplibregl from 'maplibre-gl';
@@ -17,7 +17,6 @@ const TERRAIN_SPEC = {
 const VERTIPORTS = [
   { name: '잠실', key: 'jamsil', lat: 37.513, lng: 127.108, isTarget: true },
   { name: '여의도', key: 'yeouido', lat: 37.525, lng: 126.924, isTarget: false },
-  { name: '강남', key: 'gangnam', lat: 37.501, lng: 127.037, isTarget: false },
   { name: '수서', key: 'suseo', lat: 37.488, lng: 127.123, isTarget: false },
 ];
 
@@ -129,8 +128,11 @@ export function Map3D({ uams }: Map3DProps) {
         })}
       </Map>
 
-      <div className="absolute top-4 left-4 z-10 bg-slate-900/80 border border-slate-700 p-2 rounded text-xs text-sky-400 font-mono pointer-events-none">
-        3D RADAR VIEW ACTIVE
+      <div className="absolute top-4 left-4 z-10 bg-slate-900/80 border border-slate-700 p-2 rounded text-xs text-sky-400 font-mono pointer-events-none flex flex-col gap-0.5">
+        <span>3D RADAR VIEW ACTIVE</span>
+        <span className="text-slate-400">
+          TRACKING <span className="text-sky-300 font-bold">{uams.length}</span> / 50 UAM
+        </span>
       </div>
     </div>
   );

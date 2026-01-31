@@ -14,7 +14,6 @@ export class AppController {
   @MessagePattern('uam/command/land')
   handleLandingCommand(@Payload() data: { uamId: string; command: string; timestamp: string }) {
     console.log(`[Simulator/Controller] Received landing command for:`, data.uamId);
-    // this.appService.approveLanding(data.uamId);
-    this.appService.stopSimulation(data.uamId);
+    this.appService.approveLanding(data.uamId);
   }
 }

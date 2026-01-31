@@ -9,13 +9,12 @@ export class AppService implements OnModuleInit {
 
   constructor(@Inject('UAM_SERVICE') private client: ClientProxy) { }
 
-  private readonly INITIAL_FLEET_SIZE = 50;
+  private readonly INITIAL_FLEET_SIZE = 20;
 
   // 서울 주요 거점 (버티포트 후보지)
   private readonly VERTIPORTS: { name: string; key: VertiportKey; lat: number; lng: number }[] = [
     { name: '여의도', key: 'yeouido', lat: 37.525, lng: 126.924 },
     { name: '잠실', key: 'jamsil', lat: 37.513, lng: 127.108 },
-    { name: '강남', key: 'gangnam', lat: 37.501, lng: 127.037 },
     { name: '수서', key: 'suseo', lat: 37.488, lng: 127.123 },
   ];
 
