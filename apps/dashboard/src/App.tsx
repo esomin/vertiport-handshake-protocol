@@ -7,9 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
   BatteryFull, AlertCircle, MapPin, Navigation,
-  CheckCircle2, XCircle, PlaneLanding, Clock, Map, List, Layers
+  CheckCircle2, XCircle, PlaneLanding, Clock, Map, List, CalendarClock
 } from "lucide-react";
 import { Map3D } from './Map3D';
+import { LandingPriorityMap } from './LandingPriorityMap';
 
 const socket = io('http://localhost:3002');
 
@@ -90,40 +91,50 @@ function App() {
 
   const hasLanded = landedUams.length > 0;
 
-  // ── 버티포트 패드 상태 계산 ──
-  // 4개 패드: waitingForLanding 기체가 패드를 예약, 최근 landedUams는 점유 중으로 표시
-  const PAD_NAMES = ['A', 'B', 'C', 'D'] as const;
-  const PAD_COUNT = PAD_NAMES.length;
+  // ── ETA 계산 ──
+  // 버티포트 좌표 (잠실 헤리패드 기준)
+  const VERTIPORT_LAT = 37.5133;
+  const VERTIPORT_LNG = 127.1028;
+  const CRUISE_SPEED_MS = 150_000 / 3600; // 150 km/h → m/s (~41.7 m/s)
 
-  // waitingForLanding 기체 목록 (최대 PAD_COUNT개)
-  const waitingUams = displayedUams.filter(u => u.waitingForLanding).slice(0, PAD_COUNT);
-  // 최근 착륙 완료 기체 (패드 아직 미청소 가정, waitingUams로 채워지지 않은 패드)
-  const remainingSlots = PAD_COUNT - waitingUams.length;
-  const recentlyLanded = landedUams.slice(0, remainingSlots);
-
-  interface PadState {
-    name: string;
-    status: 'OCCUPIED_WAITING' | 'OCCUPIED_LANDED' | 'AVAILABLE';
-    uamId?: string;
-    landedAt?: string;
+  function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6_371_000;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  const padStates: PadState[] = PAD_NAMES.map((name, i) => {
-    if (i < waitingUams.length) {
-      return { name, status: 'OCCUPIED_WAITING', uamId: waitingUams[i].uamId };
-    }
-    const landedIdx = i - waitingUams.length;
-    if (landedIdx < recentlyLanded.length) {
-      return { name, status: 'OCCUPIED_LANDED', uamId: recentlyLanded[landedIdx].uamId, landedAt: recentlyLanded[landedIdx].landedAt };
-    }
-    return { name, status: 'AVAILABLE' };
+  interface EtaEntry {
+    uam: (typeof displayedUams)[0];
+    rank: number;
+    etaMin: number;       // 버티포트까지 소요 시간 (분)
+    distKm: number;       // 남은 거리 (km)
+    isWaiting: boolean;   // waitingForLanding
+    arrivalTime: string;  // 도착 예상 시각
+  }
+
+  const now = new Date();
+  // 우선순위 기체 최대 10대 표시 (Priority Zone 상위 3 + Standby Queue 7)
+  const etaList: EtaEntry[] = displayedUams.slice(0, 10).map((uam, i) => {
+    const distM = haversineMeters(uam.latitude, uam.longitude, VERTIPORT_LAT, VERTIPORT_LNG);
+    const distKm = distM / 1000;
+    // waitingForLanding 기체는 호버링 중 → 자체 하강 시간(~1.5분) 만 소요
+    const etaMin = uam.waitingForLanding
+      ? 1.5
+      : Math.round((distM / CRUISE_SPEED_MS) / 60);
+    const arrival = new Date(now.getTime() + etaMin * 60_000);
+    const arrivalTime = arrival.toLocaleTimeString('ko-KR', {
+      hour: '2-digit', minute: '2-digit'
+    });
+    return { uam, rank: i + 1, etaMin, distKm, isWaiting: !!uam.waitingForLanding, arrivalTime };
   });
 
-  const availablePads = padStates.filter(p => p.status === 'AVAILABLE').length;
-  // 대기 중인 기체 수 (waitingForLanding이지만 패드 배정 못받은 기체)
-  const queuedCount = Math.max(0, displayedUams.filter(u => u.waitingForLanding).length - waitingUams.length);
-  // 예상 대기 시간 (패드당 평균 3분 점유 가정)
-  const estimatedWaitMin = availablePads === 0 ? Math.ceil(queuedCount * 3) : 0;
+  // 타임라인 최대 ETA(분) — 스케일 기준
+  const maxEtaMin = Math.max(...etaList.map(e => e.etaMin), 1);
 
   return (
     <div className="bg-slate-950 h-screen overflow-hidden text-white flex flex-col">
@@ -187,10 +198,10 @@ function App() {
 
         {/* ── 탭: 착륙 우선순위 기체 목록 + 버티포트 현황 ── */}
         {activeTab === 'list' && (
-          <div className="flex flex-1 overflow-hidden divide-x divide-slate-800">
+          <div className="flex flex-1 overflow-hidden divide-x divide-slate-800" style={{ minWidth: 0 }}>
 
             {/* 좌측: 착륙 우선순위 기체 목록 (스크롤) */}
-            <div className="flex flex-col flex-1 min-w-0 overflow-y-auto p-8">
+            <div className="flex flex-col flex-[2] min-w-0 overflow-y-auto p-8">
               <div className="flex items-center gap-3 mb-5">
                 <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
                   <Navigation size={18} className="text-sky-400" />
@@ -277,59 +288,61 @@ function App() {
                 </>
               )}
 
-              {/* ── Zone B: 4~10위 — Compact List ── */}
+              {/* ── Zone B: 4~10위 — 카드 ── */}
               {displayedUams.slice(3).length > 0 && (
                 <>
                   <div className="flex items-center gap-2 mb-3">
                     <span className="text-[10px] font-bold tracking-widest text-slate-500 uppercase">Standby Queue</span>
                     <div className="flex-1 h-px bg-slate-800" />
                   </div>
-                  <div className="flex flex-col gap-1">
+                  <div className="flex flex-wrap gap-0 mb-6">
                     {displayedUams.slice(3).map((uam, i) => {
                       const index = i + 3;
                       const isLowBattery = uam.batteryPercent < 20;
                       return (
-                        <div
-                          key={uam.uamId}
-                          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border transition-all duration-200 group hover:border-slate-600 hover:bg-slate-800/50 ${uam.isEmergency
-                            ? 'border-red-900/60 bg-red-950/30'
+                        <div key={uam.uamId} className="p-3">
+                          <Card className={`w-[240px] ${uam.isEmergency
+                            ? 'border-red-500 bg-red-950 text-white'
                             : uam.waitingForLanding
-                              ? 'border-amber-900/50 bg-amber-950/20'
-                              : 'border-slate-800 bg-slate-900/30'
-                            }`}
-                        >
-                          {/* 순위 */}
-                          <span className="text-xs font-bold text-slate-600 w-5 text-right flex-shrink-0">#{index + 1}</span>
-
-                          {/* ID */}
-                          <span className="font-mono text-sm text-slate-400 group-hover:text-slate-300 flex-1 min-w-0 truncate">
-                            {uam.uamId}
-                            {uam.isEmergency && <AlertCircle size={12} className="inline ml-1.5 text-red-500 animate-pulse" />}
-                          </span>
-
-                          {/* 상태 뱃지 */}
-                          {uam.waitingForLanding
-                            ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-700/40 flex-shrink-0">착륙 대기</span>
-                            : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-500 flex-shrink-0">비행 중</span>
-                          }
-
-                          {/* 배터리 */}
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <BatteryFull size={12} className={isLowBattery ? 'text-red-500' : 'text-slate-500'} />
-                            <span className={`text-xs ${isLowBattery ? 'text-red-400 font-bold' : 'text-slate-500'}`}>
-                              {uam.batteryPercent.toFixed(0)}%
-                            </span>
-                          </div>
-
-                          {/* 승인 버튼 (hover 시만 표시) */}
-                          <Button
-                            className="h-6 text-[10px] px-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex-shrink-0"
-                            variant={uam.isEmergency ? "destructive" : "outline"}
-                            size="sm"
-                            onClick={() => handleApproveClick(uam)}
-                          >
-                            승인
-                          </Button>
+                              ? 'border-amber-400 bg-slate-900 text-white'
+                              : 'border-slate-700 bg-slate-900 text-white'
+                            }`}>
+                            <CardHeader>
+                              <div className="flex justify-between items-center h-3">
+                                <CardTitle className="font-mono flex items-center gap-2 text-sm">
+                                  <span className="text-[10px] font-bold text-slate-500">#{index + 1}</span>
+                                  {uam.uamId}
+                                  {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
+                                </CardTitle>
+                                {uam.isEmergency
+                                  ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
+                                  : uam.waitingForLanding
+                                    ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
+                                    : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">비행 중</Badge>
+                                }
+                              </div>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="flex flex-col gap-1.5 mb-3">
+                                <p className="flex items-center gap-2 text-sm text-slate-300">
+                                  <BatteryFull className={isLowBattery ? 'text-red-500' : 'text-green-500'} size={15} />
+                                  <span className={isLowBattery ? 'text-red-500 font-bold' : ''}>
+                                    배터리 {uam.batteryPercent.toFixed(1)}%
+                                  </span>
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  {uam.latitude.toFixed(4)}, {uam.longitude.toFixed(4)} · {uam.altitude.toFixed(0)}m
+                                </p>
+                              </div>
+                              <Button
+                                className="w-full h-8 text-xs"
+                                variant={uam.isEmergency ? "destructive" : "default"}
+                                onClick={() => handleApproveClick(uam)}
+                              >
+                                착륙 승인
+                              </Button>
+                            </CardContent>
+                          </Card>
                         </div>
                       );
                     })}
@@ -338,149 +351,169 @@ function App() {
               )}
             </div>
 
-            {/* ── 우측: 버티포트 현황판 (항상 표시) ── */}
-            <div className="w-[340px] flex-shrink-0 flex flex-col overflow-hidden bg-slate-900/40">
+            {/* ── 가운데: 착륙 우선순위 기체 맵 ── */}
+            <div className="flex-[3] min-w-0 overflow-hidden relative">
+              <LandingPriorityMap uams={displayedUams} />
+            </div>
 
-              {/* ── 상단: 패드 현황 ── */}
-              <div className="p-5 border-b border-slate-800">
-                <h2 className="text-sm font-bold text-slate-300 flex items-center gap-2 mb-4">
-                  <Layers size={15} className="text-sky-400" />
-                  VERTIPORT STATUS
-                  <span className="ml-auto font-normal text-xs">
-                    <span className={availablePads > 0 ? 'text-emerald-400' : 'text-red-400'}>
-                      {availablePads}
-                    </span>
-                    <span className="text-slate-600"> / {PAD_COUNT} available</span>
+            {/* ── 우측: ETA Landing Sequence Timeline ── */}
+            <div className="flex-[1] min-w-0 flex flex-col overflow-hidden bg-slate-900/40">
+
+              {/* ── 타임라인 헤더 ── */}
+              <div className="px-5 pt-5 pb-3 border-b border-slate-800">
+                <h2 className="text-sm font-bold text-slate-300 flex items-center gap-2">
+                  <CalendarClock size={15} className="text-sky-400" />
+                  LANDING SEQUENCE
+                  <span className="ml-auto text-[10px] font-normal text-slate-600">
+                    {etaList.length}대 추적 중
                   </span>
                 </h2>
+                <p className="text-[10px] text-slate-600 mt-1">
+                  버티포트 기준 · 크루즈 150km/h 적용
+                </p>
+              </div>
 
-                {/* 패드 목록 */}
-                <div className="flex flex-col gap-2 mb-4">
-                  {padStates.map((pad) => (
-                    <div key={pad.name} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all duration-500 ${
-                      pad.status === 'OCCUPIED_WAITING'
-                        ? 'border-amber-700/60 bg-amber-950/30'
-                        : pad.status === 'OCCUPIED_LANDED'
-                          ? 'border-slate-700 bg-slate-800/60'
-                          : 'border-emerald-800/40 bg-emerald-950/10'
-                    }`}>
-                      {/* 패드 이름 */}
-                      <span className="font-mono font-bold text-base w-6 text-center flex-shrink-0 text-slate-400">
-                        {pad.name}
+              {/* ── 타임라인 본문 ── */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {etaList.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full text-slate-700 gap-2">
+                    <CalendarClock size={28} className="opacity-30" />
+                    <span className="text-xs">추적 중인 기체 없음</span>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    {/* NOW 표시 */}
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-[10px] font-bold text-slate-500 w-8 text-right flex-shrink-0">NOW</span>
+                      <div className="w-3 h-3 rounded-full bg-sky-400 ring-2 ring-sky-400/30 flex-shrink-0" />
+                      <div className="flex-1 h-px bg-gradient-to-r from-sky-700/60 to-transparent" />
+                      <span className="text-[10px] text-sky-400 font-mono flex-shrink-0">
+                        {now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
                       </span>
-
-                      {/* 상태 바 */}
-                      <div className="flex-1 h-1.5 rounded-full overflow-hidden bg-slate-800">
-                        <div className={`h-full rounded-full transition-all duration-700 ${
-                          pad.status === 'OCCUPIED_WAITING'
-                            ? 'w-full bg-amber-500'
-                            : pad.status === 'OCCUPIED_LANDED'
-                              ? 'w-full bg-slate-500'
-                              : 'w-0'
-                        }`} />
-                      </div>
-
-                      {/* 상태 / 기체 ID */}
-                      {pad.status === 'OCCUPIED_WAITING' ? (
-                        <div className="flex flex-col items-end flex-shrink-0">
-                          <span className="font-mono text-xs font-bold text-amber-300">{pad.uamId}</span>
-                          <span className="text-[10px] text-amber-600">착륙 대기</span>
-                        </div>
-                      ) : pad.status === 'OCCUPIED_LANDED' ? (
-                        <div className="flex flex-col items-end flex-shrink-0">
-                          <span className="font-mono text-xs text-slate-400">{pad.uamId}</span>
-                          <span className="text-[10px] text-slate-600">정리 중</span>
-                        </div>
-                      ) : (
-                        <span className="text-xs font-semibold text-emerald-500 flex-shrink-0">OPEN</span>
-                      )}
                     </div>
-                  ))}
-                </div>
 
-                {/* 요약 통계 */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
-                    <div className="text-[10px] text-slate-500 mb-0.5">수용 가능</div>
-                    <div className={`text-lg font-bold font-mono ${
-                      availablePads > 1 ? 'text-emerald-400' : availablePads === 1 ? 'text-amber-400' : 'text-red-400'
-                    }`}>
-                      {availablePads} <span className="text-xs font-normal text-slate-500">/ {PAD_COUNT}</span>
-                    </div>
-                  </div>
-                  <div className="rounded-lg bg-slate-800/60 border border-slate-700/50 px-3 py-2">
-                    <div className="text-[10px] text-slate-500 mb-0.5">예상 대기</div>
-                    <div className={`text-lg font-bold font-mono ${
-                      estimatedWaitMin === 0 ? 'text-emerald-400' : estimatedWaitMin <= 5 ? 'text-amber-400' : 'text-red-400'
-                    }`}>
-                      {estimatedWaitMin === 0
-                        ? <span className="text-sm">즉시</span>
-                        : <>{estimatedWaitMin}<span className="text-xs font-normal text-slate-500">분</span></>
-                      }
-                    </div>
-                  </div>
-                </div>
+                    {/* 수직 타임라인 바 */}
+                    <div className="absolute left-[2.15rem] top-8 bottom-0 w-px bg-slate-800" />
 
-                {/* 대기 큐 알림 */}
-                {queuedCount > 0 && (
-                  <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950/40 border border-red-800/50">
-                    <AlertCircle size={13} className="text-red-400 flex-shrink-0 animate-pulse" />
-                    <span className="text-xs text-red-300">
-                      패드 초과 — {queuedCount}대 추가 대기 중
-                    </span>
+                    {/* 기체 목록 */}
+                    <div className="flex flex-col gap-2">
+                      {etaList.map((entry, i) => {
+                        const isTop3 = entry.rank <= 3;
+                        const barWidth = Math.max(8, Math.round((entry.etaMin / maxEtaMin) * 100));
+
+                        return (
+                          <div key={entry.uam.uamId} className="flex items-start gap-2">
+                            {/* 시간 레이블 */}
+                            <span className={`text-[10px] w-8 text-right flex-shrink-0 font-mono pt-2 ${entry.isWaiting ? 'text-amber-400' : 'text-slate-600'
+                              }`}>
+                              {entry.isWaiting ? '~1m' : `+${entry.etaMin}m`}
+                            </span>
+
+                            {/* 노드 점 */}
+                            <div className="flex-shrink-0 pt-1.5">
+                              <div className={`w-2.5 h-2.5 rounded-full border-2 transition-all duration-300 ${entry.uam.isEmergency
+                                ? 'bg-red-500 border-red-400'
+                                : entry.isWaiting
+                                  ? 'bg-amber-500 border-amber-400 ring-2 ring-amber-500/30'
+                                  : isTop3
+                                    ? 'bg-sky-500 border-sky-400'
+                                    : 'bg-slate-600 border-slate-500'
+                                }`} />
+                            </div>
+
+                            {/* 컨텐츠 카드 */}
+                            <div className={`flex-1 rounded-lg border px-3 py-2 transition-all duration-300 ${entry.uam.isEmergency
+                              ? 'border-red-800/60 bg-red-950/20'
+                              : entry.isWaiting
+                                ? 'border-amber-700/50 bg-amber-950/20'
+                                : isTop3
+                                  ? 'border-slate-700/80 bg-slate-800/40'
+                                  : 'border-slate-800/60 bg-slate-900/20'
+                              }`}>
+                              {/* 최상단: 순위 + ID + 상태 */}
+                              <div className="flex items-center gap-1.5 mb-1.5">
+                                <span className="text-[10px] font-bold text-slate-600">#{entry.rank}</span>
+                                <span className={`font-mono text-xs font-bold flex-1 truncate ${entry.uam.isEmergency ? 'text-red-300'
+                                  : entry.isWaiting ? 'text-amber-300'
+                                    : isTop3 ? 'text-slate-200'
+                                      : 'text-slate-400'
+                                  }`}>
+                                  {entry.uam.uamId}
+                                  {entry.uam.isEmergency && <AlertCircle size={10} className="inline ml-1 text-red-500 animate-pulse" />}
+                                </span>
+                                {entry.isWaiting ? (
+                                  <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-700/40 flex-shrink-0">착륙 대기</span>
+                                ) : (
+                                  <span className="text-[10px] px-1 py-0.5 rounded bg-slate-700/40 text-slate-500 flex-shrink-0">비행 중</span>
+                                )}
+                              </div>
+
+                              {/* ETA 바 + 도착 시각 */}
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-700 ${entry.uam.isEmergency ? 'bg-red-500'
+                                      : entry.isWaiting ? 'bg-amber-500'
+                                        : isTop3 ? 'bg-sky-600'
+                                          : 'bg-slate-600'
+                                      }`}
+                                    style={{ width: `${barWidth}%` }}
+                                  />
+                                </div>
+                                <span className="text-[10px] text-slate-600 font-mono flex-shrink-0">
+                                  {entry.arrivalTime}
+                                </span>
+                              </div>
+
+                              {/* 거리 */}
+                              {!entry.isWaiting && (
+                                <span className="text-[10px] text-slate-700 mt-1 block">
+                                  {entry.distKm.toFixed(1)} km
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* 버티포트 도착점 */}
+                    <div className="flex items-center gap-2 mt-3">
+                      <span className="text-[10px] font-bold text-emerald-600 w-8 text-right flex-shrink-0">VTPT</span>
+                      <div className="w-2.5 h-2.5 rounded-sm bg-emerald-600 flex-shrink-0" />
+                      <div className="flex-1 h-px bg-emerald-900/60" />
+                      <span className="text-[10px] text-emerald-700 font-mono">Jamsil VP</span>
+                    </div>
                   </div>
                 )}
               </div>
 
               {/* ── 하단: 착륙 완료 로그 ── */}
-              <div className="flex-1 overflow-y-auto p-5">
-                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <PlaneLanding size={12} />
-                  착륙 완료 로그
-                  {hasLanded && (
-                    <span className="ml-auto text-emerald-500">{landedUams.length}대</span>
-                  )}
-                </h3>
-
-                {!hasLanded ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-slate-700">
-                    <PlaneLanding size={28} className="mb-2 opacity-30" />
-                    <span className="text-xs">착륙 완료 기록 없음</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-2">
+              {hasLanded && (
+                <div className="border-t border-slate-800 px-5 py-3 max-h-[160px] overflow-y-auto">
+                  <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                    <PlaneLanding size={11} />
+                    착륙 완료 로그
+                    <span className="ml-auto text-emerald-600">{landedUams.length}대</span>
+                  </h3>
+                  <div className="flex flex-col gap-1">
                     {landedUams.map((record, idx) => (
                       <div
                         key={`${record.uamId}-${record.landedAt}`}
-                        className={`rounded-lg border px-3 py-2 flex items-center gap-2.5 transition-all duration-500 ${
-                          idx === 0
-                            ? 'border-emerald-700/60 bg-emerald-950/40'
-                            : 'border-slate-800 bg-slate-800/30'
-                        }`}
+                        className={`flex items-center gap-2 px-2 py-1 rounded border text-[10px] transition-all duration-500 ${idx === 0
+                          ? 'border-emerald-800/50 bg-emerald-950/30 text-emerald-400'
+                          : 'border-slate-800 text-slate-600'
+                          }`}
                       >
-                        <CheckCircle2
-                          size={14}
-                          className={idx === 0 ? 'text-emerald-400 flex-shrink-0' : 'text-slate-600 flex-shrink-0'}
-                        />
-                        <span className={`font-mono text-xs font-bold flex-1 truncate ${
-                          idx === 0 ? 'text-emerald-300' : 'text-slate-500'
-                        }`}>
-                          {record.uamId}
-                        </span>
-                        <span className="flex items-center gap-1 text-[10px] text-slate-600 flex-shrink-0">
-                          <Clock size={10} />
-                          {formatLandedAt(record.landedAt)}
-                        </span>
-                        {idx === 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-600/30 text-emerald-400 border border-emerald-700/50 flex-shrink-0">
-                            최신
-                          </span>
-                        )}
+                        <CheckCircle2 size={11} className="flex-shrink-0" />
+                        <span className="font-mono font-bold flex-1 truncate">{record.uamId}</span>
+                        <span className="font-mono">{formatLandedAt(record.landedAt)}</span>
+                        {idx === 0 && <span className="text-emerald-500">●</span>}
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         )}
