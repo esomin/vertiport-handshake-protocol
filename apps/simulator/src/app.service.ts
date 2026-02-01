@@ -93,6 +93,9 @@ export class AppService implements OnModuleInit {
       state.waitingForLanding = false;
     } else {
       state.waitingForLanding = true; // LDP 진입
+      if (state.destinationKey !== 'jamsil') {
+        state.landingApproved = true;
+      }
     }
 
     // 3. 단계별 고도 시뮬레이션
