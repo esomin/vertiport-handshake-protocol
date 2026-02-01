@@ -25,10 +25,6 @@ interface Map3DProps {
 }
 
 export function Map3D({ uams }: Map3DProps) {
-  useEffect(() => {
-    console.log('Map3D component mounted');
-  }, []);
-
   return (
     <div className="w-full h-full min-h-[350px] relative bg-slate-950">
       <Map

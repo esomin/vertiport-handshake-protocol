@@ -4,14 +4,8 @@ import { type UamVehicleStatus } from '@uam/types';
 import { AppService } from './app.service';
 import { EventsGateway } from './events.gateway';
 
-// 잠실 버티포트 좌표
-const JAMSIL_LAT = 37.513;
-const JAMSIL_LNG = 127.100;
-
-// 위경도 유클리드 거리 계산 (정규화용 최대치: 서울 대각선 약 0.15도)
-const MAX_DIST = 0.15;
-// 최대 순항고도 기준 (m)
-const MAX_ALT = 500;
+// 서울 주요 거점 간 최대 거리를 약 20km로 가정 (거리 정규화용)
+const MAX_DISTANCE_KM = 20;
 
 @Controller()
 export class AppController {
@@ -24,38 +18,43 @@ export class AppController {
    * [Stream B] 착륙 큐 전용: 잠실 목적지 기체만 구독
    * - 우선순위 점수 계산 후 Redis ZSET에 저장
    * - NestJS MQTT 라우터는 구체 패턴을 우선 매칭하므로
-   *   와일드카드 핸들러(handleAllStatus)가 호출되지 않음 →
-   *   여기서 직접 updateMapBuffer도 함께 호출
+   * 와일드카드 핸들러(handleAllStatus)가 호출되지 않음 →
+   * 여기서 직접 updateMapBuffer도 함께 호출
    */
   @MessagePattern('uam/status/jamsil')
   async handleJamsilStatus(@Payload() data: UamVehicleStatus) {
-    // 착륙 완료된 기체는 Redis 재저장 및 버퍼 갱신 관하지 않음
+    // 착륙 완료된 기체는 Redis 재저장 및 버퍼 갱신 관여하지 않음
     if (this.eventsGateway.isAlreadyLanded(data.uamId)) {
       return;
     }
+
     /**
-     * [우선순위 점수 계산] 높을수록 먼저 착륙 승인 대상
-     *
-     * 1. 비상 여부     : +1000 (최우선)
-     * 2. 배터리 잔량   : (100 - battery) * 4  → 최대  400점 (낮을수록 위험)
-     * 3. 잠실까지 거리 : (1 - dist/MAX_DIST) * 300 → 최대 300점 (가까울수록 곧 도착)
-     * 4. 현재 고도     : (1 - alt/MAX_ALT) * 150  → 최대 150점 (낮을수록 착륙 임박)
+     * [우선순위 점수 계산] 높을수록 먼저 착륙 승인 대상 (총점 1000점 만점)
      */
-    const emergency = data.isEmergency ? 1000 : 0;
 
-    // 배터리 점수 (낮을수록 +)
-    const batteryScore = (100 - Math.max(0, Math.min(100, data.batteryPercent))) * 2;
+    // 1. 비상 상황 (S_E): 500점 (배터리 15% 미만 시 즉시 최고 우선순위 부여)
+    const isEmergency = data.batteryPercent < 15;
+    const emergencyScore = isEmergency ? 500 : 0;
 
-    // 잠실까지 거리 점수 (가까울수록 +)
-    const dLat = data.latitude - JAMSIL_LAT;
-    const dLng = data.longitude - JAMSIL_LNG;
-    const dist = Math.sqrt(dLat * dLat + dLng * dLng);
-    const distScore = Math.max(0, (1 - dist / MAX_DIST)) * 300;
+    // 2. 배터리 (F_B): 최대 350점
+    // - 20% 초과: 0점
+    // - 10% ~ 20% 사이: 20%에서 0점, 10%에서 350점으로 급격히 상승 (선형 비례 계산)
+    // - 10% 미만: 350점 만점 (이 경우 S_E 500점도 함께 받아 총 850점 이상 확보)
+    let batteryScore = 0;
+    if (data.batteryPercent <= 10) {
+      batteryScore = 350;
+    } else if (data.batteryPercent <= 20) {
+      batteryScore = ((20 - data.batteryPercent) / 10) * 350;
+    }
 
-    // 고도 점수 (낮을수록 = 착륙 준비 중 = +)
-    const altScore = Math.max(0, (1 - data.altitude / MAX_ALT)) * 150;
+    // 3. 거리/시간 (F_D): 최대 150점
+    // - 시뮬레이터에서 계산해준 distanceToTargetKm(물리적 거리) 활용
+    // - 0km에 가까울수록 150점에 근접, MAX_DISTANCE_KM(20km) 이상이면 0점
+    const normalizedDist = Math.min(data.distanceToTargetKm, MAX_DISTANCE_KM);
+    const distScore = Math.max(0, (1 - normalizedDist / MAX_DISTANCE_KM)) * 150;
 
-    const priorityScore = emergency + batteryScore + distScore + altScore;
+    // 총 우선순위 점수 산출
+    const priorityScore = emergencyScore + batteryScore + distScore;
 
     // [Stream B] Redis ZSET에 저장 (착륙 큐 우선순위 계산용)
     await this.appService.updatePriorityQueue(data.uamId, priorityScore, data);

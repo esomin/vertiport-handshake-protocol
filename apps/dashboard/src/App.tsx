@@ -1,18 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { UamVehicleStatus } from '@uam/types';
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import {
-  BatteryFull, AlertCircle, MapPin, Navigation,
-  CheckCircle2, XCircle, PlaneLanding, Clock, Map, List, CalendarClock
+  AlertCircle,
+  BatteryFull,
+  CalendarClock,
+  CheckCircle2,
+  List,
+  Map as MapIcon,
+  MapPin,
+  Navigation,
+  PlaneLanding,
+  XCircle
 } from "lucide-react";
 import { Map3D } from './Map3D';
 import { LandingPriorityMap } from './LandingPriorityMap';
 
 const socket = io('http://localhost:3002');
+
+// 긴급 상황 판단 기준 상수 (스케줄러와 동일한 규칙)
+const EMERGENCY_BATTERY_THRESHOLD = 15;
 
 interface LandedRecord {
   uamId: string;
@@ -33,6 +43,17 @@ function App() {
   const [pendingApproval, setPendingApproval] = useState<UamVehicleStatus | null>(null);
   const [isQueueLocked, setIsQueueLocked] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('list');
+
+  // ── 자동 비상 착륙 프로토콜 ──
+  const priorityEntryTimesRef = useRef<Map<string, number>>(new Map()); // uamId → 진입 시각(ms)
+  const autoTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // uamId → 타이머 ID
+  const [autoLandingUams, setAutoLandingUams] = useState<Set<string>>(new Set()); // 자동 착륙 발동됨
+  const [countdown, setCountdown] = useState<Map<string, number>>(new Map()); // uamId → 남은 초
+
+  // 긴급 상태 판단 헬퍼 함수
+  const isEmergency = useCallback((uam: UamVehicleStatus) => {
+    return uam.batteryPercent < EMERGENCY_BATTERY_THRESHOLD;
+  }, []);
 
   useEffect(() => {
     // [Stream B] 착륙 큐: Redis 우선순위 top-10
@@ -62,6 +83,63 @@ function App() {
     }
   }, [uams, isQueueLocked]);
 
+  const triggerAutoLanding = useCallback((uamId: string) => {
+    socket.emit('landing:approve', { uamId });
+    setAutoLandingUams(prev => new Set([...prev, uamId]));
+    autoTimersRef.current.delete(uamId);
+    priorityEntryTimesRef.current.delete(uamId);
+    setPendingApproval(prev => prev?.uamId === uamId ? null : prev);
+  }, []);
+
+  // ── Priority Zone 진입 감지 & 자동 착륙 타이머 ──
+  useEffect(() => {
+    const topThree = uams.slice(0, 3);
+    const topThreeIds = new Set(topThree.map(u => u.uamId));
+
+    // top-3 이탈한 기체 타이머 정리
+    for (const [uamId] of autoTimersRef.current) {
+      if (!topThreeIds.has(uamId)) {
+        clearTimeout(autoTimersRef.current.get(uamId)!);
+        autoTimersRef.current.delete(uamId);
+        priorityEntryTimesRef.current.delete(uamId);
+      }
+    }
+
+    for (const uam of topThree) {
+      if (autoLandingUams.has(uam.uamId)) continue; // 이미 발동됨
+
+      if (isEmergency(uam)) {
+        // 즉시 자동 착륙 — 기존 타이머도 취소
+        if (autoTimersRef.current.has(uam.uamId)) {
+          clearTimeout(autoTimersRef.current.get(uam.uamId)!);
+          autoTimersRef.current.delete(uam.uamId);
+          priorityEntryTimesRef.current.delete(uam.uamId);
+        }
+        triggerAutoLanding(uam.uamId);
+      } else if (!autoTimersRef.current.has(uam.uamId)) {
+        // 신규 진입: 60초 타이머 시작
+        priorityEntryTimesRef.current.set(uam.uamId, Date.now());
+        const timer = setTimeout(() => {
+          triggerAutoLanding(uam.uamId);
+        }, 60_000);
+        autoTimersRef.current.set(uam.uamId, timer);
+      }
+    }
+  }, [uams, autoLandingUams, triggerAutoLanding, isEmergency]);
+
+  // ── 카운트다운 ticker (1초마다 갱신) ──
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const updated = new Map<string, number>();
+      for (const [uamId, entryTime] of priorityEntryTimesRef.current) {
+        updated.set(uamId, Math.max(0, Math.ceil((60_000 - (now - entryTime)) / 1000)));
+      }
+      setCountdown(updated);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   // 잠금 중 백그라운드에서 변경된 기체 수 계산
   const pendingChangeCount = isQueueLocked
     ? uams.filter(u => {
@@ -76,7 +154,13 @@ function App() {
 
   const handleConfirm = () => {
     if (!pendingApproval) return;
-    socket.emit('landing:approve', { uamId: pendingApproval.uamId });
+    const { uamId } = pendingApproval;
+    socket.emit('landing:approve', { uamId });
+    if (autoTimersRef.current.has(uamId)) {
+      clearTimeout(autoTimersRef.current.get(uamId)!);
+      autoTimersRef.current.delete(uamId);
+      priorityEntryTimesRef.current.delete(uamId);
+    }
     setPendingApproval(null);
   };
 
@@ -115,6 +199,7 @@ function App() {
     distKm: number;       // 남은 거리 (km)
     isWaiting: boolean;   // waitingForLanding
     arrivalTime: string;  // 도착 예상 시각
+    isUamEmergency: boolean; // 렌더링 최적화
   }
 
   const now = new Date();
@@ -130,14 +215,22 @@ function App() {
     const arrivalTime = arrival.toLocaleTimeString('ko-KR', {
       hour: '2-digit', minute: '2-digit'
     });
-    return { uam, rank: i + 1, etaMin, distKm, isWaiting: !!uam.waitingForLanding, arrivalTime };
+    return {
+      uam,
+      rank: i + 1,
+      etaMin,
+      distKm,
+      isWaiting: !!uam.waitingForLanding,
+      arrivalTime,
+      isUamEmergency: isEmergency(uam)
+    };
   });
 
   // 타임라인 최대 ETA(분) — 스케일 기준
   const maxEtaMin = Math.max(...etaList.map(e => e.etaMin), 1);
 
   return (
-    <div className="bg-slate-950 h-screen overflow-hidden text-white flex flex-col">
+    <div className="bg-slate-900 h-screen overflow-hidden text-white flex flex-col">
       {/* ── 헤더 ── */}
       <div className="px-8 pt-6 pb-0 border-b border-slate-800">
         <div className="flex items-center gap-4 mb-4">
@@ -181,7 +274,7 @@ function App() {
               : 'border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-600'
               }`}
           >
-            <Map size={15} />
+            <MapIcon size={15} />
             비행 중 기체
             {mapUams.length > 0 && (
               <span className={`ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold ${activeTab === 'map' ? 'bg-sky-500/20 text-sky-300' : 'bg-slate-700/60 text-slate-400'
@@ -202,6 +295,8 @@ function App() {
 
             {/* 좌측: 착륙 우선순위 기체 목록 (스크롤) */}
             <div className="flex flex-col flex-[2] min-w-0 overflow-y-auto p-8">
+
+              {/* 복원된 태그 1: 타이틀 및 실시간/잠금 토글 */}
               <div className="flex items-center gap-3 mb-5">
                 <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
                   <Navigation size={18} className="text-sky-400" />
@@ -218,12 +313,15 @@ function App() {
                   <span className={`text-xs font-medium transition-colors duration-200 ${isQueueLocked ? 'text-amber-300' : 'text-slate-400'}`}>
                     {isQueueLocked ? '잠금 중' : '실시간'}
                   </span>
-                  <Switch
-                    checked={isQueueLocked}
-                    onCheckedChange={setIsQueueLocked}
-                    className="data-[state=checked]:!bg-amber-500"
-                    size='sm'
-                  />
+                  <div className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={isQueueLocked}
+                      onChange={(e) => setIsQueueLocked(e.target.checked)}
+                    />
+                    <div className="w-8 h-4 bg-slate-700 rounded-full peer peer-checked:bg-amber-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+                  </div>
                 </label>
               </div>
 
@@ -237,26 +335,32 @@ function App() {
                   <div className="flex flex-wrap gap-0 mb-6">
                     {displayedUams.slice(0, 3).map((uam, index) => {
                       const isLowBattery = uam.batteryPercent < 20;
+                      const isAutoLanding = autoLandingUams.has(uam.uamId);
+                      const uamEmergency = isEmergency(uam);
                       return (
                         <div key={uam.uamId} className="p-3">
-                          <Card className={`w-[240px] ${uam.isEmergency
-                            ? 'border-red-500 bg-red-950 text-white'
-                            : uam.waitingForLanding
-                              ? 'border-amber-400 bg-slate-900 text-white'
-                              : 'border-slate-700 bg-slate-900 text-white'
+                          <Card className={`w-[240px] ${isAutoLanding
+                            ? 'border-red-400 bg-red-950 text-white'
+                            : uamEmergency
+                              ? 'border-red-500 bg-red-950 text-white'
+                              : uam.waitingForLanding
+                                ? 'border-amber-400 bg-slate-800 text-white'
+                                : 'border-slate-700 bg-slate-800 text-white'
                             }`}>
                             <CardHeader>
                               <div className="flex justify-between items-center h-3">
                                 <CardTitle className="font-mono flex items-center gap-2 text-sm">
                                   <span className="text-[10px] font-bold text-slate-500">#{index + 1}</span>
                                   {uam.uamId}
-                                  {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
+                                  {(uamEmergency || isAutoLanding) && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
                                 </CardTitle>
-                                {uam.isEmergency
-                                  ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
-                                  : uam.waitingForLanding
-                                    ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
-                                    : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">비행 중</Badge>
+                                {isAutoLanding
+                                  ? <Badge className="bg-red-500/30 text-red-300 border border-red-400/60 text-[10px] animate-pulse">AUTO LANDING</Badge>
+                                  : uamEmergency
+                                    ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
+                                    : uam.waitingForLanding
+                                      ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
+                                      : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">비행 중</Badge>
                                 }
                               </div>
                             </CardHeader>
@@ -272,9 +376,20 @@ function App() {
                                   {uam.latitude.toFixed(4)}, {uam.longitude.toFixed(4)} · {uam.altitude.toFixed(0)}m
                                 </p>
                               </div>
+                              {/* (참고) 원본 코드에 주석처리 되어있던 자동착륙 카운트다운 */}
+                              {/* {isAutoLanding ? (
+                                <p className="text-[10px] text-red-400 text-center mb-2 animate-pulse font-bold">
+                                  ⚡ EMERGENCY LANDING IN PROGRESS
+                                </p>
+                              ) : (
+                                <p className="text-[10px] text-slate-500 text-center mb-2">
+                                  자동 착륙까지 <span className="text-amber-400 font-bold">{countdown.get(uam.uamId) ?? 60}s</span>
+                                </p>
+                              )} */}
                               <Button
                                 className="w-full h-8 text-xs"
-                                variant={uam.isEmergency ? "destructive" : "default"}
+                                variant={uamEmergency ? "destructive" : "default"}
+                                disabled={isAutoLanding}
                                 onClick={() => handleApproveClick(uam)}
                               >
                                 착륙 승인
@@ -299,22 +414,23 @@ function App() {
                     {displayedUams.slice(3).map((uam, i) => {
                       const index = i + 3;
                       const isLowBattery = uam.batteryPercent < 20;
+                      const uamEmergency = isEmergency(uam);
                       return (
                         <div key={uam.uamId} className="p-3">
-                          <Card className={`w-[240px] ${uam.isEmergency
+                          <Card className={`w-[240px] ${uamEmergency
                             ? 'border-red-500 bg-red-950 text-white'
                             : uam.waitingForLanding
-                              ? 'border-amber-400 bg-slate-900 text-white'
-                              : 'border-slate-700 bg-slate-900 text-white'
+                              ? 'border-amber-400 bg-slate-800 text-white'
+                              : 'border-slate-700 bg-slate-800 text-white'
                             }`}>
                             <CardHeader>
                               <div className="flex justify-between items-center h-3">
                                 <CardTitle className="font-mono flex items-center gap-2 text-sm">
                                   <span className="text-[10px] font-bold text-slate-500">#{index + 1}</span>
                                   {uam.uamId}
-                                  {uam.isEmergency && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
+                                  {uamEmergency && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
                                 </CardTitle>
-                                {uam.isEmergency
+                                {uamEmergency
                                   ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
                                   : uam.waitingForLanding
                                     ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
@@ -336,7 +452,7 @@ function App() {
                               </div>
                               <Button
                                 className="w-full h-8 text-xs"
-                                variant={uam.isEmergency ? "destructive" : "default"}
+                                variant={uamEmergency ? "destructive" : "default"}
                                 onClick={() => handleApproveClick(uam)}
                               >
                                 착륙 승인
@@ -359,7 +475,7 @@ function App() {
             {/* ── 우측: ETA Landing Sequence Timeline ── */}
             <div className="flex-[1] min-w-0 flex flex-col overflow-hidden bg-slate-900/40">
 
-              {/* ── 타임라인 헤더 ── */}
+              {/* 복원된 태그 2-1: 타임라인 헤더 */}
               <div className="px-5 pt-5 pb-3 border-b border-slate-800">
                 <h2 className="text-sm font-bold text-slate-300 flex items-center gap-2">
                   <CalendarClock size={15} className="text-sky-400" />
@@ -382,7 +498,8 @@ function App() {
                   </div>
                 ) : (
                   <div className="relative">
-                    {/* NOW 표시 */}
+
+                    {/* 복원된 태그 2-2: NOW 인디케이터 및 타임라인 수직 바 */}
                     <div className="flex items-center gap-2 mb-3">
                       <span className="text-[10px] font-bold text-slate-500 w-8 text-right flex-shrink-0">NOW</span>
                       <div className="w-3 h-3 rounded-full bg-sky-400 ring-2 ring-sky-400/30 flex-shrink-0" />
@@ -391,27 +508,24 @@ function App() {
                         {now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-
-                    {/* 수직 타임라인 바 */}
                     <div className="absolute left-[2.15rem] top-8 bottom-0 w-px bg-slate-800" />
 
                     {/* 기체 목록 */}
                     <div className="flex flex-col gap-2">
-                      {etaList.map((entry, i) => {
+                      {etaList.map((entry) => {
                         const isTop3 = entry.rank <= 3;
                         const barWidth = Math.max(8, Math.round((entry.etaMin / maxEtaMin) * 100));
 
                         return (
                           <div key={entry.uam.uamId} className="flex items-start gap-2">
-                            {/* 시간 레이블 */}
-                            <span className={`text-[10px] w-8 text-right flex-shrink-0 font-mono pt-2 ${entry.isWaiting ? 'text-amber-400' : 'text-slate-600'
-                              }`}>
+                            {/* 복원된 태그 2-3: 시간 레이블 */}
+                            <span className={`text-[10px] w-8 text-right flex-shrink-0 font-mono pt-2 ${entry.isWaiting ? 'text-amber-400' : 'text-slate-600'}`}>
                               {entry.isWaiting ? '~1m' : `+${entry.etaMin}m`}
                             </span>
 
                             {/* 노드 점 */}
                             <div className="flex-shrink-0 pt-1.5">
-                              <div className={`w-2.5 h-2.5 rounded-full border-2 transition-all duration-300 ${entry.uam.isEmergency
+                              <div className={`w-2.5 h-2.5 rounded-full border-2 transition-all duration-300 ${entry.isUamEmergency
                                 ? 'bg-red-500 border-red-400'
                                 : entry.isWaiting
                                   ? 'bg-amber-500 border-amber-400 ring-2 ring-amber-500/30'
@@ -422,7 +536,7 @@ function App() {
                             </div>
 
                             {/* 컨텐츠 카드 */}
-                            <div className={`flex-1 rounded-lg border px-3 py-2 transition-all duration-300 ${entry.uam.isEmergency
+                            <div className={`flex-1 rounded-lg border px-3 py-2 transition-all duration-300 ${entry.isUamEmergency
                               ? 'border-red-800/60 bg-red-950/20'
                               : entry.isWaiting
                                 ? 'border-amber-700/50 bg-amber-950/20'
@@ -433,13 +547,13 @@ function App() {
                               {/* 최상단: 순위 + ID + 상태 */}
                               <div className="flex items-center gap-1.5 mb-1.5">
                                 <span className="text-[10px] font-bold text-slate-600">#{entry.rank}</span>
-                                <span className={`font-mono text-xs font-bold flex-1 truncate ${entry.uam.isEmergency ? 'text-red-300'
+                                <span className={`font-mono text-xs font-bold flex-1 truncate ${entry.isUamEmergency ? 'text-red-300'
                                   : entry.isWaiting ? 'text-amber-300'
                                     : isTop3 ? 'text-slate-200'
                                       : 'text-slate-400'
                                   }`}>
                                   {entry.uam.uamId}
-                                  {entry.uam.isEmergency && <AlertCircle size={10} className="inline ml-1 text-red-500 animate-pulse" />}
+                                  {entry.isUamEmergency && <AlertCircle size={10} className="inline ml-1 text-red-500 animate-pulse" />}
                                 </span>
                                 {entry.isWaiting ? (
                                   <span className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-700/40 flex-shrink-0">착륙 대기</span>
@@ -452,7 +566,7 @@ function App() {
                               <div className="flex items-center gap-2">
                                 <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden">
                                   <div
-                                    className={`h-full rounded-full transition-all duration-700 ${entry.uam.isEmergency ? 'bg-red-500'
+                                    className={`h-full rounded-full transition-all duration-700 ${entry.isUamEmergency ? 'bg-red-500'
                                       : entry.isWaiting ? 'bg-amber-500'
                                         : isTop3 ? 'bg-sky-600'
                                           : 'bg-slate-600'
@@ -465,7 +579,7 @@ function App() {
                                 </span>
                               </div>
 
-                              {/* 거리 */}
+                              {/* 복원된 태그 2-4: 거리(km) 텍스트 */}
                               {!entry.isWaiting && (
                                 <span className="text-[10px] text-slate-700 mt-1 block">
                                   {entry.distKm.toFixed(1)} km
@@ -477,7 +591,7 @@ function App() {
                       })}
                     </div>
 
-                    {/* 버티포트 도착점 */}
+                    {/* 복원된 태그 2-5: 버티포트 도착점 */}
                     <div className="flex items-center gap-2 mt-3">
                       <span className="text-[10px] font-bold text-emerald-600 w-8 text-right flex-shrink-0">VTPT</span>
                       <div className="w-2.5 h-2.5 rounded-sm bg-emerald-600 flex-shrink-0" />
@@ -488,7 +602,7 @@ function App() {
                 )}
               </div>
 
-              {/* ── 하단: 착륙 완료 로그 ── */}
+              {/* 복원된 태그 3: 하단 착륙 완료 로그 */}
               {hasLanded && (
                 <div className="border-t border-slate-800 px-5 py-3 max-h-[160px] overflow-y-auto">
                   <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-2 flex items-center gap-1.5">
@@ -537,12 +651,12 @@ function App() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-3 mb-6">
-              {pendingApproval.isEmergency ? (
+              {isEmergency(pendingApproval) ? (
                 <AlertCircle className="text-red-400 w-7 h-7 animate-pulse" />
               ) : (
                 <Navigation className="text-sky-400 w-7 h-7" />
               )}
-              <h2 className={`text-xl font-bold ${pendingApproval.isEmergency ? 'text-red-400' : 'text-sky-400'}`}>
+              <h2 className={`text-xl font-bold ${isEmergency(pendingApproval) ? 'text-red-400' : 'text-sky-400'}`}>
                 착륙 승인 확인
               </h2>
             </div>
@@ -551,7 +665,7 @@ function App() {
               아래 기체의 착륙을 승인합니다. 정보를 확인하세요.
             </p>
 
-            <div className={`rounded-xl p-5 mb-2 border ${pendingApproval.isEmergency ? 'bg-red-950 border-red-700' : 'bg-slate-900 border-slate-700'}`}>
+            <div className={`rounded-xl p-5 mb-2 border ${isEmergency(pendingApproval) ? 'bg-red-950 border-red-700' : 'bg-slate-900 border-slate-700'}`}>
               <p className="font-mono text-2xl font-bold text-white mb-3">
                 {pendingApproval.uamId}
               </p>
@@ -565,6 +679,8 @@ function App() {
                     배터리: {pendingApproval.batteryPercent.toFixed(1)}%
                   </span>
                 </div>
+
+                {/* 복원된 태그 4: 모달 내부 좌표 및 고도 */}
                 <div className="flex items-center gap-2">
                   <MapPin size={16} className="text-slate-400" />
                   <span className="text-slate-300">
@@ -577,7 +693,8 @@ function App() {
                     고도: {pendingApproval.altitude.toFixed(0)}m
                   </span>
                 </div>
-                {pendingApproval.isEmergency && (
+
+                {isEmergency(pendingApproval) && (
                   <div className="flex items-center gap-2 mt-1">
                     <AlertCircle size={16} className="text-red-400 animate-pulse" />
                     <span className="text-red-400 font-bold">비상 상황 기체</span>
@@ -590,7 +707,7 @@ function App() {
               * 이 정보는 승인 버튼을 클릭한 시점의 스냅샷입니다.
             </p>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 mt-6">
               <Button
                 id="modal-cancel-btn"
                 className="flex-1 bg-slate-700 hover:!bg-slate-600 text-white"
@@ -602,7 +719,7 @@ function App() {
               </Button>
               <Button
                 id="modal-confirm-btn"
-                className={`flex-1 font-bold ${pendingApproval.isEmergency ? 'bg-red-600 hover:bg-red-500' : 'bg-green-600 hover:bg-green-500'} text-white`}
+                className={`flex-1 font-bold ${isEmergency(pendingApproval) ? 'bg-red-600 hover:bg-red-500' : 'bg-green-600 hover:bg-green-500'} text-white`}
                 onClick={handleConfirm}
               >
                 <CheckCircle2 size={16} className="mr-2" />

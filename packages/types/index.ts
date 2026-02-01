@@ -5,12 +5,12 @@ export interface VehicleState {
   alt: number;
   targetLat: number;
   targetLng: number;
-  speed: number; // 초당 이동 위경도 (대략적인 수치)
-  battery: number; // 배터리 잔량 (0~100)
-  destinationKey: VertiportKey; // 목적지 거점 키
-  intervalId: ReturnType<typeof setInterval>;
-  waitingForLanding: boolean; // 착륙 대기 중 (호버링)
-  landingApproved: boolean;   // 착륙 승인 여부
+  speed: number; // 위경도 단위 속도
+  battery: number;
+  destinationKey: string;
+  intervalId: any;
+  waitingForLanding: boolean;
+  landingApproved: boolean;
 }
 
 export interface UamVehicleStatus {
@@ -19,14 +19,16 @@ export interface UamVehicleStatus {
   longitude: number;
   altitude: number;
   batteryPercent: number;
-  isEmergency: boolean;
   timestamp: number;
   heading: number;
-  targetLat: number;   // 목적지 위도
-  targetLng: number;   // 목적지 경도
-  speed: number;       // 초당 이동 위경도 (대략적인 수치)
-  destinationKey: VertiportKey; // 목적지 거점 키 (토픽 라우팅용)
-  waitingForLanding: boolean;   // 착륙 대기 중 여부
+  targetLat: number;
+  targetLng: number;
+  destinationKey: string;
+  // 스케줄러를 위한 추가 데이터 (FD 가중치용)
+  distanceToTargetKm: number;
+  speedKmh: number;
+  etaSeconds: number;
+  waitingForLanding: boolean;
 }
 
 export interface PriorityQueueItem extends UamVehicleStatus {
