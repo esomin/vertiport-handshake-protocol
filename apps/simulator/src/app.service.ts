@@ -19,6 +19,9 @@ export class AppService implements OnModuleInit {
   private readonly APPROACH_RADIUS_KM = 4.0; // 접근 단계 진입 거리 (4km)
   private readonly LDP_RADIUS_KM = 0.2;     // LDP 진입 거리 (200m)
 
+  // 긴급 강제 착륙 배터리 기준 (프론트엔드는 20%)
+  private readonly EMERGENCY_BATTERY_THRESHOLD = 15;
+
   private readonly VERTIPORTS = [
     { name: '여의도', key: 'yeouido', lat: 37.525, lng: 126.924 },
     { name: '잠실', key: 'jamsil', lat: 37.513, lng: 127.108 },
@@ -77,6 +80,12 @@ export class AppService implements OnModuleInit {
     if (state.landingApproved && state.alt <= 0) {
       this.stopSimulation(uamId);
       return;
+    }
+
+    // 1.5 긴급 강제 자동 착륙 판정 (배터리가 마지노선 이하로 떨어지면 즉시 하강)
+    if (!state.landingApproved && state.battery < this.EMERGENCY_BATTERY_THRESHOLD) {
+      state.landingApproved = true;
+      console.warn(`[Simulator] ${uamId} CRITICAL BATTERY (${state.battery.toFixed(1)}%). EMERGENCY AUTO-LANDING INITIATED.`);
     }
 
     // 2. 이동 로직

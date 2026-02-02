@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { UamVehicleStatus } from '@uam/types';
 import { Button } from "@/components/ui/button";
@@ -21,8 +21,8 @@ import { LandingPriorityMap } from './LandingPriorityMap';
 
 const socket = io('http://localhost:3002');
 
-// 긴급 상황 판단 기준 상수 (스케줄러와 동일한 규칙)
-const EMERGENCY_BATTERY_THRESHOLD = 15;
+// 프론트엔드 긴급 상황 기준 (수동 착륙 유도)
+const EMERGENCY_BATTERY_THRESHOLD = 20;
 
 interface LandedRecord {
   uamId: string;
@@ -44,11 +44,7 @@ function App() {
   const [isQueueLocked, setIsQueueLocked] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('list');
 
-  // ── 자동 비상 착륙 프로토콜 ──
-  const priorityEntryTimesRef = useRef<Map<string, number>>(new Map()); // uamId → 진입 시각(ms)
-  const autoTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map()); // uamId → 타이머 ID
-  const [autoLandingUams, setAutoLandingUams] = useState<Set<string>>(new Set()); // 자동 착륙 발동됨
-  const [countdown, setCountdown] = useState<Map<string, number>>(new Map()); // uamId → 남은 초
+  // ── 자동 착륙 로직은 서버로 이관됨 (여기서는 상태만 렌더링) ──
 
   // 긴급 상태 판단 헬퍼 함수
   const isEmergency = useCallback((uam: UamVehicleStatus) => {
@@ -83,62 +79,6 @@ function App() {
     }
   }, [uams, isQueueLocked]);
 
-  const triggerAutoLanding = useCallback((uamId: string) => {
-    socket.emit('landing:approve', { uamId });
-    setAutoLandingUams(prev => new Set([...prev, uamId]));
-    autoTimersRef.current.delete(uamId);
-    priorityEntryTimesRef.current.delete(uamId);
-    setPendingApproval(prev => prev?.uamId === uamId ? null : prev);
-  }, []);
-
-  // ── Priority Zone 진입 감지 & 자동 착륙 타이머 ──
-  useEffect(() => {
-    const topThree = uams.slice(0, 3);
-    const topThreeIds = new Set(topThree.map(u => u.uamId));
-
-    // top-3 이탈한 기체 타이머 정리
-    for (const [uamId] of autoTimersRef.current) {
-      if (!topThreeIds.has(uamId)) {
-        clearTimeout(autoTimersRef.current.get(uamId)!);
-        autoTimersRef.current.delete(uamId);
-        priorityEntryTimesRef.current.delete(uamId);
-      }
-    }
-
-    for (const uam of topThree) {
-      if (autoLandingUams.has(uam.uamId)) continue; // 이미 발동됨
-
-      if (isEmergency(uam)) {
-        // 즉시 자동 착륙 — 기존 타이머도 취소
-        if (autoTimersRef.current.has(uam.uamId)) {
-          clearTimeout(autoTimersRef.current.get(uam.uamId)!);
-          autoTimersRef.current.delete(uam.uamId);
-          priorityEntryTimesRef.current.delete(uam.uamId);
-        }
-        triggerAutoLanding(uam.uamId);
-      } else if (!autoTimersRef.current.has(uam.uamId)) {
-        // 신규 진입: 60초 타이머 시작
-        priorityEntryTimesRef.current.set(uam.uamId, Date.now());
-        const timer = setTimeout(() => {
-          triggerAutoLanding(uam.uamId);
-        }, 60_000);
-        autoTimersRef.current.set(uam.uamId, timer);
-      }
-    }
-  }, [uams, autoLandingUams, triggerAutoLanding, isEmergency]);
-
-  // ── 카운트다운 ticker (1초마다 갱신) ──
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const updated = new Map<string, number>();
-      for (const [uamId, entryTime] of priorityEntryTimesRef.current) {
-        updated.set(uamId, Math.max(0, Math.ceil((60_000 - (now - entryTime)) / 1000)));
-      }
-      setCountdown(updated);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // 잠금 중 백그라운드에서 변경된 기체 수 계산
   const pendingChangeCount = isQueueLocked
@@ -156,11 +96,6 @@ function App() {
     if (!pendingApproval) return;
     const { uamId } = pendingApproval;
     socket.emit('landing:approve', { uamId });
-    if (autoTimersRef.current.has(uamId)) {
-      clearTimeout(autoTimersRef.current.get(uamId)!);
-      autoTimersRef.current.delete(uamId);
-      priorityEntryTimesRef.current.delete(uamId);
-    }
     setPendingApproval(null);
   };
 
@@ -334,33 +269,28 @@ function App() {
                   </div>
                   <div className="flex flex-wrap gap-0 mb-6">
                     {displayedUams.slice(0, 3).map((uam, index) => {
-                      const isLowBattery = uam.batteryPercent < 20;
-                      const isAutoLanding = autoLandingUams.has(uam.uamId);
+                      const isLowBattery = uam.batteryPercent < EMERGENCY_BATTERY_THRESHOLD;
                       const uamEmergency = isEmergency(uam);
                       return (
                         <div key={uam.uamId} className="p-3">
-                          <Card className={`w-[240px] ${isAutoLanding
-                            ? 'border-red-400 bg-red-950 text-white'
-                            : uamEmergency
-                              ? 'border-red-500 bg-red-950 text-white'
-                              : uam.waitingForLanding
-                                ? 'border-amber-400 bg-slate-800 text-white'
-                                : 'border-slate-700 bg-slate-800 text-white'
+                          <Card className={`w-[240px] ${uamEmergency
+                            ? 'border-red-500 bg-red-950 text-white'
+                            : uam.waitingForLanding
+                              ? 'border-amber-400 bg-slate-800 text-white'
+                              : 'border-slate-700 bg-slate-800 text-white'
                             }`}>
                             <CardHeader>
                               <div className="flex justify-between items-center h-3">
                                 <CardTitle className="font-mono flex items-center gap-2 text-sm">
                                   <span className="text-[10px] font-bold text-slate-500">#{index + 1}</span>
                                   {uam.uamId}
-                                  {(uamEmergency || isAutoLanding) && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
+                                  {uamEmergency && <AlertCircle className="text-red-500 animate-pulse w-4 h-4" />}
                                 </CardTitle>
-                                {isAutoLanding
-                                  ? <Badge className="bg-red-500/30 text-red-300 border border-red-400/60 text-[10px] animate-pulse">AUTO LANDING</Badge>
-                                  : uamEmergency
-                                    ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
-                                    : uam.waitingForLanding
-                                      ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
-                                      : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">비행 중</Badge>
+                                {uamEmergency
+                                  ? <Badge variant="destructive" className="text-[10px]">Emergency</Badge>
+                                  : uam.waitingForLanding
+                                    ? <Badge className="bg-amber-500/20 text-amber-300 border border-amber-500/50 text-[10px]">착륙 대기</Badge>
+                                    : <Badge className="bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px]">비행 중</Badge>
                                 }
                               </div>
                             </CardHeader>
@@ -376,20 +306,9 @@ function App() {
                                   {uam.latitude.toFixed(4)}, {uam.longitude.toFixed(4)} · {uam.altitude.toFixed(0)}m
                                 </p>
                               </div>
-                              {/* (참고) 원본 코드에 주석처리 되어있던 자동착륙 카운트다운 */}
-                              {/* {isAutoLanding ? (
-                                <p className="text-[10px] text-red-400 text-center mb-2 animate-pulse font-bold">
-                                  ⚡ EMERGENCY LANDING IN PROGRESS
-                                </p>
-                              ) : (
-                                <p className="text-[10px] text-slate-500 text-center mb-2">
-                                  자동 착륙까지 <span className="text-amber-400 font-bold">{countdown.get(uam.uamId) ?? 60}s</span>
-                                </p>
-                              )} */}
                               <Button
                                 className="w-full h-8 text-xs"
                                 variant={uamEmergency ? "destructive" : "default"}
-                                disabled={isAutoLanding}
                                 onClick={() => handleApproveClick(uam)}
                               >
                                 착륙 승인
