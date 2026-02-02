@@ -100,6 +100,35 @@ export class EventsGateway implements OnModuleInit, OnGatewayConnection {
     return this.landedUamIds.has(uamId);
   }
 
+  /** 시뮬레이터에서 자동/수동 착륙되었을 때 호출되어 착륙을 확정짓는 공통 로직 */
+  async registerLanded(uamId: string) {
+    if (this.landedUamIds.has(uamId)) {
+      return { status: 'already_landed', uamId };
+    }
+
+    // 착륙 완료 Set에 즉시 등록 (이후 들어오는 MQTT/Redis 업데이트 차단)
+    this.landedUamIds.add(uamId);
+
+    // ── Redis에서 해당 기체 제거 (우선순위 큐 & 상세 정보) ──────────────────
+    await this.redis.zrem('uam:landing:queue', uamId);
+    await this.redis.del(`uam:detail:${uamId}`);
+    // rawBuffer에서도 즉시 제거
+    this.rawBuffer.delete(uamId);
+
+    // 착륙 완료 기록 추가
+    const record: LandedRecord = {
+      uamId,
+      landedAt: new Date().toISOString(),
+    };
+    this.landedUams.unshift(record); // 최신이 위로
+
+    // 전체 클라이언트에 착륙 목록 브로드캐스트
+    this.server.emit('landed:update', this.landedUams);
+
+    // 처리 결과 응답 (Ack)
+    return { status: 'registered', uamId };
+  }
+
   /**
    * [L3] 대시보드로부터 착륙 승인 명령 수신
    * @SubscribeMessage('landing:approve')
@@ -114,29 +143,10 @@ export class EventsGateway implements OnModuleInit, OnGatewayConnection {
 
     console.log(`[Command] Dashboard approved landing for: ${data.uamId}`);
 
-    // 착륙 완료 Set에 즉시 등록 (이후 들어오는 MQTT/Redis 업데이트 차단)
-    this.landedUamIds.add(data.uamId);
-
-    // AppService를 통해 MQTT로 시뮬레이터에 명령 전송
+    // AppService를 통해 MQTT로 시뮬레이터에 하강 명령 전송
     await this.appService.sendLandingCommand(data.uamId);
 
-    // ── Redis에서 해당 기체 제거 (우선순위 큐 & 상세 정보) ──────────────────
-    await this.redis.zrem('uam:landing:queue', data.uamId);
-    await this.redis.del(`uam:detail:${data.uamId}`);
-    // rawBuffer에서도 즉시 제거
-    this.rawBuffer.delete(data.uamId);
-
-    // 착륙 완료 기록 추가
-    const record: LandedRecord = {
-      uamId: data.uamId,
-      landedAt: new Date().toISOString(),
-    };
-    this.landedUams.unshift(record); // 최신이 위로
-
-    // 전체 클라이언트에 착륙 목록 브로드캐스트
-    this.server.emit('landed:update', this.landedUams);
-
-    // 처리 결과 응답 (Ack)
-    return { status: 'sent', uamId: data.uamId };
+    // 대시보드 수동 승인이므로 바로 착륙 리스트에 등록 (선제적 등록)
+    return this.registerLanded(data.uamId);
   }
 }

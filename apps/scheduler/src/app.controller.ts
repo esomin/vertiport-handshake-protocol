@@ -72,4 +72,12 @@ export class AppController {
   handleAllStatus(@Payload() data: UamVehicleStatus) {
     this.eventsGateway.updateMapBuffer(data);
   }
+
+  /**
+   * [Simulator → Scheduler] 자동착륙 등에 의해 착륙 완료(고도0) 통보 수신
+   */
+  @MessagePattern('uam/landed')
+  async handleUamLanded(@Payload() data: { uamId: string }) {
+    await this.eventsGateway.registerLanded(data.uamId);
+  }
 }

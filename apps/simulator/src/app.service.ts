@@ -166,6 +166,10 @@ export class AppService implements OnModuleInit {
       clearInterval(state.intervalId);
       this.vehicleStates.delete(uamId);
       console.log(`[Simulator] ${uamId} Landed safely.`);
+
+      // 스케줄러(관제소)에 해당 기체의 최종 착륙 완료 통보 (자동/수동 모두)
+      this.client.emit('uam/landed', { uamId });
+
       setTimeout(() => this.startSimulation(), 2000);
     }
   }
