@@ -44,6 +44,13 @@ export class EventsGateway implements OnModuleInit, OnGatewayConnection {
 
     // ── [Stream A] 지도용: 500ms마다 rawBuffer에서 최신 50대 emit ──────────────
     setInterval(() => {
+      // 5초 동안 업데이트가 없는 기체는 rawBuffer에서 제거
+      const now = Date.now();
+      for (const [key, value] of this.rawBuffer.entries()) {
+        if (now - value.timestamp > 5000) {
+          this.rawBuffer.delete(key);
+        }
+      }
       if (this.rawBuffer.size === 0) return;
       const mapPayload = Array.from(this.rawBuffer.values());
       this.server.emit('map:update', mapPayload);
